@@ -12,7 +12,8 @@ const port = process.env.PORT || 5000;
 const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
-    origin: "*", // Allow all origins (for development)
+    origin: "*",
+    methods: ["GET", "POST"], // Allowed methods
   },
 });
 
@@ -39,6 +40,7 @@ async function run() {
     // await client.connect();
     // console.log("✅ Connected to MongoDB");
 
+    const userCollection = client.db("taskManagerDB").collection("users");
     const taskCollection = client.db("taskManagerDB").collection("tasks");
 
     // 🔹 **Socket.io: Handle Real-Time Connections**
@@ -54,12 +56,31 @@ async function run() {
       });
     });
 
+    // save or update user data on mongodb
+    app.post("/user/:email", async (req, res) => {
+      const email = req.params.email;
+      const query = { email };
+      const user = req.body;
+
+      const isExist = await userCollection.findOne(query);
+      if (isExist) {
+        return res.send(isExist);
+      }
+
+      const result = await userCollection.insertOne(user);
+      res.send(result);
+    });
+
     app.get("/tasks", async (req, res) => {
       try {
-        const result = await taskCollection
-          .find()
-          .sort({ index: 1 }) // First sort by index, then by creation date
-          .toArray();
+        const email = req.query.email;
+        // console.log(email,'emial');
+
+        const userExists = await userCollection.findOne({ email });
+        if (!userExists) {
+          return res.status(403).send({ message: "Unauthorized access" });
+        }
+        const result = await taskCollection.find().sort({ index: 1 }).toArray();
 
         // Ensure the correct order and return to client
         res.send(result);
@@ -72,7 +93,17 @@ async function run() {
     // 🔹 **POST: Add New Task**
     app.post("/tasks", async (req, res) => {
       try {
+        const email = req.body.email;
+        // Check if the user exists
+        const userExists = await userCollection.findOne({ email });
+        if (!userExists) {
+          return res
+            .status(403)
+            .send({ message: "Unauthorized: User not found" });
+        }
+
         const task = req.body;
+
         task.createdAt = new Date(); // Add creation date
         const result = await taskCollection.insertOne(task);
         io.emit("task-updated", task); // Notify all clients
